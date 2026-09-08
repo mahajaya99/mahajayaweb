@@ -91,7 +91,7 @@ function enterApp(){
 // Script, jadi google.script.run tidak lagi tersedia — semua panggilan ke
 // backend (Code.gs) dilakukan lewat fetch() ke URL Web App ini. Ganti
 // GAS_API_URL di bawah dengan URL deployment Apps Script punya kamu.
-const GAS_API_URL = 'PASTE_URL_WEB_APP_APPS_SCRIPT_DI_SINI/exec';
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyyj_f2rpwi16hud_bTBzf-4n81u9sgNX-6L28RRPt3tz6M9uyfxAq5QoS0sp3ikE-9/exec';
 
 function gs(fn, ...args){
   if (!GAS_API_URL || GAS_API_URL.indexOf('PASTE_URL_WEB_APP') !== -1){
