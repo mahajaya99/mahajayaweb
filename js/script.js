@@ -115,6 +115,30 @@ function gs(fn, ...args){
 }
 function rupiah(n){ n = Number(n)||0; return 'Rp ' + n.toLocaleString('id-ID'); }
 
+// ================= CACHE RINGAN UNTUK PEMANGGILAN "GET..." =================
+// Setiap kali menu dibuka, sebelumnya SELALU nunggu round-trip baru ke Apps Script
+// (yang punya overhead network + eksekusi server tersendiri, terasa lambat kalau
+// bolak-balik pindah menu yang sama). Dengan cache ini, hasil "getX" disimpan
+// sebentar di memori tab browser (CACHE_TTL_MS) dan dipakai ulang instan kalau menu
+// yang sama dibuka lagi dalam jangka waktu itu — TANPA menunggu server sama sekali.
+// PENTING: begitu ada perubahan data (tambah/ubah/hapus apa pun lewat form manapun),
+// clearDataCache() dipanggil untuk mengosongkan SEMUA cache, supaya menu manapun yang
+// dibuka setelahnya selalu mengambil data terbaru dari server, tidak pernah basi.
+const CACHE_TTL_MS = 20000;
+const _dataCache = new Map();
+function gsCached(fn, ...args){
+  const key = fn + '|' + JSON.stringify(args);
+  const hit = _dataCache.get(key);
+  if(hit && (Date.now() - hit.time) < CACHE_TTL_MS){
+    return Promise.resolve(hit.data);
+  }
+  return gs(fn, ...args).then(data => {
+    _dataCache.set(key, { data, time: Date.now() });
+    return data;
+  });
+}
+function clearDataCache(){ _dataCache.clear(); }
+
 // ================= CETAK STRUK PEMBAYARAN (58mm thermal) =================
 // Dibuka di tab/window baru (BUKAN iframe) berukuran kertas 58mm. Web App Apps
 // Script memuat index.html di dalam iframe cross-origin, dan browser memblokir
@@ -621,7 +645,7 @@ async function loadDashboard(){
     // jadi totalnya lambat. Sekarang backend getDashboardSummary sudah menyertakan
     // semua data yang dibutuhkan (unpaidList & todayPayments) dalam SATU kali
     // panggilan, jadi dashboard hanya perlu satu round-trip ke server.
-    const d = await gs('getDashboardSummary');
+    const d = await gsCached('getDashboardSummary');
     document.getElementById('statAktif').textContent = d.aktif;
     document.getElementById('statTotalPelanggan').textContent = 'dari ' + d.totalPelanggan + ' total pelanggan';
     document.getElementById('statPemasukan').textContent = rupiah(d.pemasukanBulanIni);
@@ -684,7 +708,7 @@ async function loadPelangganTable(){
   const tbody = document.getElementById('tblPelanggan');
   showDataLoading();
   try{
-    pelangganCache = await gs('getPelangganList');
+    pelangganCache = await gsCached('getPelangganList');
     renderPelangganTable();
     showDataLoaded();
   }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="11">Gagal memuat: ${err.message}</td></tr>`; }
@@ -751,7 +775,7 @@ function editPelanggan(p){
   document.getElementById('modalPelanggan').classList.add('active');
 }
 async function populatePaketDropdown(selectId){
-  const paket = await gs('getPaketList');
+  const paket = await gsCached('getPaketList');
   const sel = document.getElementById(selectId);
   sel.innerHTML = paket.map(p=>`<option value="${p.nama}" data-tarif="${p.tarif}">${p.nama} (${p.bandwidth})</option>`).join('');
 }
@@ -776,13 +800,14 @@ async function submitPelanggan(e){
   try{
     if(idEdit){ await gs('updatePelanggan', idEdit, data); toast('Data pelanggan diperbarui.'); }
     else{ const r = await gs('addPelanggan', data); toast('Pelanggan ditambahkan: ' + r.id); }
+    clearDataCache();
     closeModal('modalPelanggan');
     loadPelangganTable();
   }catch(err){ toast('Gagal menyimpan: '+err.message, true); }
 }
 async function deletePelangganRow(id){
   if(!confirm('Hapus pelanggan ' + id + '? Tindakan ini tidak bisa dibatalkan.')) return;
-  try{ await gs('deletePelanggan', id); toast('Pelanggan dihapus.'); loadPelangganTable(); }
+  try{ await gs('deletePelanggan', id); clearDataCache(); toast('Pelanggan dihapus.'); loadPelangganTable(); }
   catch(err){ toast('Gagal menghapus: '+err.message, true); }
 }
 
@@ -792,7 +817,7 @@ async function loadPaketTable(){
   const tbody = document.getElementById('tblPaket');
   showDataLoading();
   try{
-    paketCache = await gs('getPaketList');
+    paketCache = await gsCached('getPaketList');
     if(paketCache.length===0){ tbody.innerHTML = '<tr class="loading-row"><td colspan="5">Belum ada paket.</td></tr>'; showDataLoaded(); return; }
     tbody.innerHTML = paketCache.map(p=>`
       <tr>
@@ -830,13 +855,14 @@ async function submitPaket(e){
   try{
     if(namaLama){ await gs('updatePaket', namaLama, data); toast('Paket diperbarui.'); }
     else{ await gs('addPaket', data); toast('Paket ditambahkan.'); }
+    clearDataCache();
     closeModal('modalPaket');
     loadPaketTable();
   }catch(err){ toast('Gagal menyimpan: '+err.message, true); }
 }
 async function deletePaketRow(nama){
   if(!confirm('Hapus paket "'+nama+'"?')) return;
-  try{ await gs('deletePaket', nama); toast('Paket dihapus.'); loadPaketTable(); }
+  try{ await gs('deletePaket', nama); clearDataCache(); toast('Paket dihapus.'); loadPaketTable(); }
   catch(err){ toast('Gagal menghapus: '+err.message, true); }
 }
 
@@ -862,7 +888,7 @@ async function loadPaymentInit(){
   document.getElementById('payTanggal').value = todayISO();
   showDataLoading();
   try{
-    const pelanggan = await gs('getPelangganList');
+    const pelanggan = await gsCached('getPelangganList');
     pelangganCacheForPayment = pelanggan.filter(p=>isAktif(p.status));
     const sel = document.getElementById('payIdPelanggan');
     sel.innerHTML = pelangganCacheForPayment.map(p=>`<option value="${p.id}">${p.id} — ${p.nama}</option>`).join('');
@@ -923,6 +949,7 @@ async function submitPayment(e){
   try{
     const res = await gs('addPayment', data);
     if(res && res.success===false){ toast(res.message || 'Gagal menyimpan pembayaran.', true); return; }
+    clearDataCache();
     toast('Pembayaran tersimpan.');
     window.lastPayment = res.payment || null;
     setCetakStrukEnabled(true);
@@ -938,7 +965,7 @@ async function loadPaymentTable(){
   tbody.innerHTML = '<tr class="loading-row"><td colspan="9">Memuat data…</td></tr>';
   showDataLoading();
   try{
-    let list = await gs('getPaymentList');
+    let list = await gsCached('getPaymentList');
     const filt = document.getElementById('filterPeriodePayment').value;
     if(filt) list = list.filter(p=>p.periode===filt);
     if(list.length===0){ tbody.innerHTML = '<tr class="loading-row"><td colspan="10">Tidak ada data.</td></tr>'; showDataLoaded(); return; }
@@ -957,7 +984,7 @@ async function loadPaymentTable(){
 }
 async function deletePaymentRow(no){
   if(!confirm('Hapus data pembayaran ini?')) return;
-  try{ await gs('deletePayment', no); toast('Pembayaran dihapus.'); loadPaymentTable(); }
+  try{ await gs('deletePayment', no); clearDataCache(); toast('Pembayaran dihapus.'); loadPaymentTable(); }
   catch(err){ toast('Gagal menghapus: '+err.message, true); }
 }
 async function loadUnpaidTable(){
@@ -969,7 +996,7 @@ async function loadUnpaidTable(){
   document.getElementById('totalBelumBayarUnpaid').textContent = '–';
   showDataLoading();
   try{
-    const list = await gs('getUnpaidByMonth', periode);
+    const list = await gsCached('getUnpaidByMonth', periode);
     // Update card "Total Belum Bayar" sesuai jumlah hasil filter periode ini.
     document.getElementById('totalBelumBayarUnpaid').textContent = list.length + ' pelanggan';
     if(list.length===0){ tbody.innerHTML = '<tr class="loading-row"><td colspan="5">Semua pelanggan aktif sudah membayar periode ini 🎉</td></tr>'; showDataLoaded(); return; }
@@ -998,7 +1025,7 @@ async function loadSetoranPetugas(){
   document.getElementById('setoranPetugasHint').textContent = session ? ('Setoran akan dicatat atas nama: ' + session.name) : '';
   showDataLoading();
   try{
-    const res = await gs('getSetoranPetugasSummary', periode);
+    const res = await gsCached('getSetoranPetugasSummary', periode);
     if(res && res.success===false){ toast(res.message || 'Gagal memuat ringkasan setoran.', true); hideDataPopup(); return; }
     currentSetoranSummary = res;
     document.getElementById('setoranJumlahPembayar').textContent = res.jumlahPembayarTunai + ' orang';
@@ -1041,6 +1068,7 @@ async function submitSetoran(e){
     // BUKAN diketik manual — sesuai permintaan fitur ini.
     const res = await gs('addSetoranPetugas', { periode, petugas: session.name, nominal, keterangan });
     if(res && res.success===false){ toast(res.message || 'Gagal menyimpan setoran.', true); return; }
+    clearDataCache();
     toast('Setoran tersimpan.');
     document.getElementById('formSetoran').reset();
     loadSetoranPetugas();
@@ -1068,6 +1096,7 @@ async function submitPengeluaran(e){
   try{
     const res = await gs('addPengeluaran', data);
     if(res && res.success===false){ toast(res.message || 'Gagal menyimpan pengeluaran.', true); return; }
+    clearDataCache();
     toast('Pengeluaran tersimpan.');
     document.getElementById('formPengeluaran').reset();
     document.getElementById('expTanggal').value = todayISO();
@@ -1079,7 +1108,7 @@ async function submitPengeluaran(e){
 }
 async function loadSaldoAkhir(){
   try{
-    const s = await gs('getSaldoAkhir');
+    const s = await gsCached('getSaldoAkhir');
     document.getElementById('saldoAkhirBesar').textContent = rupiah(s.saldoAkhir);
     document.getElementById('saldoTotalPemasukan').textContent = rupiah(s.totalPemasukan);
     document.getElementById('saldoTotalPengeluaran').textContent = rupiah(s.totalPengeluaran);
@@ -1093,7 +1122,7 @@ async function loadRekap(){
   showDataLoading();
   loadSaldoAkhir();
   try{
-    const r = await gs('getRekapBulanan', document.getElementById('filterPeriodeRekap').value);
+    const r = await gsCached('getRekapBulanan', document.getElementById('filterPeriodeRekap').value);
     document.getElementById('rekapPemasukan').textContent = rupiah(r.pemasukanBulan);
     document.getElementById('rekapPemasukanSub').textContent = 'Periode ' + r.periodePemasukanLabel;
     document.getElementById('rekapPengeluaran').textContent = rupiah(r.pengeluaranBulan);
