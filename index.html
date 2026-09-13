@@ -250,6 +250,7 @@
           <button class="tab-btn active" data-sub="pay-input" onclick="switchPaymentTab('pay-input')">Input Pembayaran</button>
           <button class="tab-btn" data-sub="pay-data" onclick="switchPaymentTab('pay-data')">Data Pembayaran</button>
           <button class="tab-btn" data-sub="pay-unpaid" onclick="switchPaymentTab('pay-unpaid')">Belum Bayar</button>
+          <button class="tab-btn" data-sub="pay-setoran" onclick="switchPaymentTab('pay-setoran')">Setoran Petugas</button>
         </div>
 
         <div class="subview active" id="sub-pay-input">
@@ -338,6 +339,58 @@
             <table>
               <thead><tr><th>ID</th><th>Nama</th><th>No HP</th><th>Paket</th><th>Tarif</th></tr></thead>
               <tbody id="tblUnpaid"><tr class="loading-row"><td colspan="5">Pilih periode lalu klik Cek.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="subview" id="sub-pay-setoran">
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <label style="font-size:13px;color:var(--ink-600);font-weight:600">Periode:</label>
+              <input type="month" class="input" id="filterPeriodeSetoran" style="width:170px">
+              <button class="btn btn-ghost btn-sm" onclick="loadSetoranPetugas()">Terapkan</button>
+            </div>
+          </div>
+
+          <div class="grid-stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
+            <div class="stat-card" style="box-shadow:none;padding:14px 16px;">
+              <div class="stat-label">Jumlah Pembayar Tunai</div>
+              <div class="stat-value" id="setoranJumlahPembayar">–</div>
+            </div>
+            <div class="stat-card" style="box-shadow:none;padding:14px 16px;">
+              <div class="stat-label">Total Uang Tunai</div>
+              <div class="stat-value" id="setoranTotalTunai">–</div>
+            </div>
+            <div class="stat-card" style="box-shadow:none;padding:14px 16px;">
+              <div class="stat-label">Total Sudah Disetor</div>
+              <div class="stat-value" id="setoranTotalDisetor">–</div>
+            </div>
+            <div class="stat-card" style="box-shadow:none;padding:14px 16px;">
+              <div class="stat-label">Saldo Belum Disetor</div>
+              <div class="stat-value" id="setoranSaldoBelum">–</div>
+            </div>
+          </div>
+
+          <div class="form-inline" style="max-width:560px;margin-bottom:20px">
+            <h3>Form Setoran</h3>
+            <form id="formSetoran" onsubmit="submitSetoran(event)">
+              <div class="field">
+                <label>Nominal Setor (Rp)</label>
+                <input type="number" class="input" id="setorNominal" min="1" step="1" required>
+              </div>
+              <div class="field">
+                <label>Keterangan (opsional)</label>
+                <input class="input" id="setorKeterangan" placeholder="mis. Setoran 1">
+              </div>
+              <div class="hint" id="setoranPetugasHint"></div>
+              <button class="btn btn-teal" type="submit" id="btnSimpanSetoran" style="width:100%;justify-content:center;margin-top:6px">Simpan Setoran</button>
+            </form>
+          </div>
+
+          <div class="table-wrap table-scroll">
+            <table>
+              <thead><tr><th>Tanggal</th><th>Petugas</th><th>Setoran</th><th>Keterangan</th></tr></thead>
+              <tbody id="tblSetoran"><tr class="loading-row"><td colspan="4">Pilih periode lalu klik Terapkan.</td></tr></tbody>
             </table>
           </div>
         </div>

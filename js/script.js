@@ -851,6 +851,10 @@ function switchPaymentTab(sub){
     document.getElementById('filterPeriodeUnpaid').value = document.getElementById('filterPeriodeUnpaid').value || currentMonth();
     loadUnpaidTable();
   }
+  if(sub==='pay-setoran'){
+    document.getElementById('filterPeriodeSetoran').value = document.getElementById('filterPeriodeSetoran').value || currentMonth();
+    loadSetoranPetugas();
+  }
 }
 let pelangganCacheForPayment = [];
 async function loadPaymentInit(){
@@ -974,6 +978,74 @@ async function loadUnpaidTable(){
     `).join('');
     showDataLoaded();
   }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="5">Gagal memuat: ${err.message}</td></tr>`; document.getElementById('totalBelumBayarUnpaid').textContent = '–'; }
+}
+
+// ================= PAYMENT: SETORAN PETUGAS =================
+// Menyimpan ringkasan (jumlah pembayar tunai, total uang tunai, total sudah
+// disetor, saldo belum disetor) hasil panggilan terakhir, dipakai untuk validasi
+// nominal setoran di frontend SEBELUM dikirim ke server (validasi final tetap
+// dilakukan ulang di backend/addSetoranPetugas, ini cuma agar respons cepat).
+let currentSetoranSummary = null;
+async function loadSetoranPetugas(){
+  const periode = document.getElementById('filterPeriodeSetoran').value || currentMonth();
+  document.getElementById('filterPeriodeSetoran').value = periode;
+  const tbody = document.getElementById('tblSetoran');
+  tbody.innerHTML = '<tr class="loading-row"><td colspan="4">Memuat data…</td></tr>';
+  ['setoranJumlahPembayar','setoranTotalTunai','setoranTotalDisetor','setoranSaldoBelum'].forEach(id=>{
+    document.getElementById(id).textContent = '–';
+  });
+  const session = getSession();
+  document.getElementById('setoranPetugasHint').textContent = session ? ('Setoran akan dicatat atas nama: ' + session.name) : '';
+  showDataLoading();
+  try{
+    const res = await gs('getSetoranPetugasSummary', periode);
+    if(res && res.success===false){ toast(res.message || 'Gagal memuat ringkasan setoran.', true); hideDataPopup(); return; }
+    currentSetoranSummary = res;
+    document.getElementById('setoranJumlahPembayar').textContent = res.jumlahPembayarTunai + ' orang';
+    document.getElementById('setoranTotalTunai').textContent = rupiah(res.totalUangTunai);
+    document.getElementById('setoranTotalDisetor').textContent = rupiah(res.totalSudahDisetor);
+    document.getElementById('setoranSaldoBelum').textContent = rupiah(res.saldoBelumDisetor);
+    document.getElementById('setorNominal').max = res.saldoBelumDisetor > 0 ? res.saldoBelumDisetor : '';
+    if(res.jumlahPembayarTunai === 0){
+      tbody.innerHTML = '<tr class="loading-row"><td colspan="4">Tidak terdapat pembayaran tunai pada periode ini.</td></tr>';
+    } else if(res.histori.length===0){
+      tbody.innerHTML = '<tr class="loading-row"><td colspan="4">Belum ada setoran untuk periode ini.</td></tr>';
+    } else {
+      tbody.innerHTML = res.histori.map(h=>`
+        <tr><td>${h.tanggal}</td><td>${h.petugas}</td><td class="money pos">${rupiah(h.nominal)}</td><td>${h.keterangan||'-'}</td></tr>`).join('');
+    }
+    showDataLoaded();
+  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="4">Gagal memuat: ${err.message}</td></tr>`; }
+}
+// Guard sederhana di frontend supaya double-click / submit berulang pada tombol
+// Simpan Setoran tidak mengirim dua request sekaligus (tombol langsung dikunci
+// SEBELUM request dikirim). Pengaman utama tetap LockService di backend.
+let isSubmittingSetoran = false;
+async function submitSetoran(e){
+  e.preventDefault();
+  if(isSubmittingSetoran) return;
+  const periode = document.getElementById('filterPeriodeSetoran').value || currentMonth();
+  const nominal = Number(document.getElementById('setorNominal').value) || 0;
+  const keterangan = document.getElementById('setorKeterangan').value;
+  const session = getSession();
+  if(!session){ toast('Sesi login tidak ditemukan, silakan login ulang.', true); return; }
+  if(nominal <= 0){ toast('Nominal setoran harus lebih besar dari 0.', true); return; }
+  if(currentSetoranSummary && nominal > currentSetoranSummary.saldoBelumDisetor){
+    toast('Nominal setoran melebihi saldo belum disetor.', true); return;
+  }
+  isSubmittingSetoran = true;
+  const btn = document.getElementById('btnSimpanSetoran');
+  btn.disabled = true;
+  try{
+    // Petugas otomatis diambil dari nama akun yang sedang login (session.name),
+    // BUKAN diketik manual — sesuai permintaan fitur ini.
+    const res = await gs('addSetoranPetugas', { periode, petugas: session.name, nominal, keterangan });
+    if(res && res.success===false){ toast(res.message || 'Gagal menyimpan setoran.', true); return; }
+    toast('Setoran tersimpan.');
+    document.getElementById('formSetoran').reset();
+    loadSetoranPetugas();
+  }catch(err){ toast('Gagal menyimpan: '+err.message, true); }
+  finally{ isSubmittingSetoran = false; btn.disabled = false; }
 }
 
 // ================= REKAP =================
