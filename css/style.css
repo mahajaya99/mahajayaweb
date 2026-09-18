@@ -307,3 +307,19 @@ tbody tr:hover{background:#fafbfd;}
   .topbar{padding:2px 2px 16px;flex-wrap:wrap;gap:10px;}
   .today-pill{display:none;}
 }
+
+/* ===== Riwayat Status Pelanggan (popup di menu Pelanggan) ===== */
+.pelanggan-row-click{cursor:pointer;}
+.pelanggan-row-click:hover{background:var(--teal-50);}
+.riwayat-timeline{display:flex;flex-direction:column;gap:0;max-height:60vh;overflow-y:auto;}
+.riwayat-item{display:flex;gap:12px;padding:12px 2px;border-bottom:1px solid var(--border);}
+.riwayat-item:last-child{border-bottom:none;}
+.riwayat-dot{flex-shrink:0;width:11px;height:11px;border-radius:50%;margin-top:4px;}
+.riwayat-dot.aktif{background:var(--success);}
+.riwayat-dot.nonaktif{background:var(--danger);}
+.riwayat-body{flex:1;min-width:0;}
+.riwayat-status{font-weight:700;font-size:13.5px;}
+.riwayat-status.aktif{color:var(--success);}
+.riwayat-status.nonaktif{color:var(--danger);}
+.riwayat-tanggal{font-size:11.5px;color:var(--ink-400);margin-top:1px;}
+.riwayat-ket{font-size:12.5px;color:var(--ink-400);margin-top:4px;line-height:1.5;}

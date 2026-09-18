@@ -498,12 +498,32 @@
         <div class="field"><label>Status</label>
           <select class="input" id="pelStatus"><option>Aktif</option><option>Nonaktif</option></select>
         </div>
+        <div class="field">
+          <label>Catatan perubahan status (opsional)</label>
+          <input class="input" id="pelCatatanStatus" placeholder="mis. nonaktif sementara, minta diaktifkan lagi bulan depan">
+          <div class="hint">Catatan ini hanya disimpan ke Riwayat kalau kamu MENGUBAH status di atas.</div>
+        </div>
         <div class="hint" id="pelIdHint"></div>
       </form>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal('modalPelanggan')">Batal</button>
       <button class="btn btn-teal" onclick="document.getElementById('formPelanggan').requestSubmit()">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Riwayat Status Pelanggan -->
+<div class="modal-overlay" id="modalRiwayatPelanggan">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modalRiwayatTitle">Riwayat Status</h3><button class="icon-btn" onclick="closeModal('modalRiwayatPelanggan')">✕</button></div>
+    <div class="modal-body">
+      <div id="riwayatPelangganList" class="riwayat-timeline">
+        <div class="empty-note">Memuat…</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal('modalRiwayatPelanggan')">Tutup</button>
     </div>
   </div>
 </div>

@@ -726,7 +726,7 @@ function renderPelangganTable(){
   });
   if(rows.length===0){ tbody.innerHTML = '<tr class="loading-row"><td colspan="11">Tidak ada data.</td></tr>'; return; }
   tbody.innerHTML = rows.map(p=>`
-    <tr>
+    <tr class="pelanggan-row-click" title="Klik untuk lihat riwayat status" onclick='openRiwayatPelanggan(${JSON.stringify(p.id)}, ${JSON.stringify(p.nama)})'>
       <td>${p.no}</td>
       <td><span class="id-chip">${p.id}</span></td>
       <td><strong>${p.nama}</strong></td>
@@ -738,14 +738,45 @@ function renderPelangganTable(){
       <td>${p.tglPasang||''}</td>
       <td><span class="badge ${isAktif(p.status)?'badge-aktif':'badge-nonaktif'}"><span class="signal-badge"><i></i><i></i><i></i></span>${p.status}</span></td>
       <td class="actions-cell">
-        <button class="icon-btn" title="Edit" onclick='editPelanggan(${JSON.stringify(p).replace(/'/g,"&apos;")})'>
+        <button class="icon-btn" title="Edit" onclick='event.stopPropagation(); editPelanggan(${JSON.stringify(p).replace(/'/g,"&apos;")})'>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
         </button>
-        <button class="icon-btn danger" title="Hapus" onclick="deletePelangganRow('${p.id}')">
+        <button class="icon-btn danger" title="Hapus" onclick="event.stopPropagation(); deletePelangganRow('${p.id}')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
         </button>
       </td>
     </tr>`).join('');
+}
+
+// ================= RIWAYAT STATUS PELANGGAN (popup, klik baris tabel Pelanggan) =================
+// Riwayat diambil dari sheet terpisah "Riwayat Status Pelanggan" (lihat Code.gs),
+// diisi otomatis setiap kali status pelanggan diubah lewat form Edit.
+async function openRiwayatPelanggan(id, nama){
+  document.getElementById('modalRiwayatTitle').textContent = 'Riwayat Status · ' + nama;
+  const listEl = document.getElementById('riwayatPelangganList');
+  listEl.innerHTML = '<div class="empty-note">Memuat…</div>';
+  document.getElementById('modalRiwayatPelanggan').classList.add('active');
+  try{
+    const riwayat = await gs('getRiwayatPelanggan', id);
+    if(!riwayat || riwayat.length===0){
+      listEl.innerHTML = '<div class="empty-note">Belum ada riwayat perubahan status untuk pelanggan ini.</div>';
+      return;
+    }
+    listEl.innerHTML = riwayat.map(r=>{
+      const cls = isAktif(r.status) ? 'aktif' : 'nonaktif';
+      return `
+      <div class="riwayat-item">
+        <span class="riwayat-dot ${cls}"></span>
+        <div class="riwayat-body">
+          <div class="riwayat-status ${cls}">${r.status}</div>
+          <div class="riwayat-tanggal">${r.tanggal}</div>
+          ${r.keterangan ? `<div class="riwayat-ket">${r.keterangan}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }catch(err){
+    listEl.innerHTML = `<div class="empty-note">Gagal memuat riwayat: ${err.message}</div>`;
+  }
 }
 document.getElementById('searchPelanggan').addEventListener('input', renderPelangganTable);
 document.getElementById('filterStatusPelanggan').addEventListener('change', renderPelangganTable);
@@ -795,7 +826,10 @@ async function submitPelanggan(e){
     tarifPaket: document.getElementById('pelTarif').value,
     secretMikrotik: document.getElementById('pelSecret').value,
     tglPasang: document.getElementById('pelTglPasang').value,
-    status: document.getElementById('pelStatus').value
+    status: document.getElementById('pelStatus').value,
+    // Hanya dipakai backend kalau status di atas benar-benar berubah dari sebelumnya
+    // (lihat updatePelanggan di Code.gs) — kalau tidak berubah, catatan ini diabaikan.
+    catatanStatus: document.getElementById('pelCatatanStatus').value
   };
   try{
     if(idEdit){ await gs('updatePelanggan', idEdit, data); toast('Data pelanggan diperbarui.'); }
