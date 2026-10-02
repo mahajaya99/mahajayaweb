@@ -44,6 +44,7 @@ function handleLogin(e){
 
 function handleLogout(){
   clearSession();
+  clearPersisted_();
   document.getElementById('appRoot').classList.remove('show');
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('loginUsername').value = '';
@@ -93,25 +94,59 @@ function enterApp(){
 // GAS_API_URL di bawah dengan URL deployment Apps Script punya kamu.
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbyyj_f2rpwi16hud_bTBzf-4n81u9sgNX-6L28RRPt3tz6M9uyfxAq5QoS0sp3ikE-9/exec';
 
+// ---- Lapisan pemanggilan API (timeout + retry + pesan error yang jelas) ----
+// FIX "tulisan merah / data tidak memuat": sebelumnya fetch tanpa timeout & tanpa retry, dan
+// res.json() langsung error "Unexpected token '<'" kalau Apps Script membalas halaman HTML
+// (server baru bangun/cold start, sedang sibuk, atau kena kuota). Sekarang: respons dibaca
+// sebagai teks, dicek aman, dan permintaan BACA (getXxx) otomatis diulang sampai 2x.
+// Permintaan TULIS (add/update/delete) sengaja TIDAK diulang otomatis supaya tidak menggandakan data.
+const GS_TIMEOUT_MS = 35000;
+const GS_MAX_RETRY = 2;
+function gsDelay_(ms){ return new Promise(r => setTimeout(r, ms)); }
+function gsOnce_(fn, args){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), GS_TIMEOUT_MS);
+  return fetch(GAS_API_URL, {
+    method: 'POST',
+    // text/plain = "simple request" tanpa preflight CORS (Apps Script tidak melayani preflight).
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ fn, args }),
+    signal: ctrl.signal
+  })
+    .then(res => res.text())
+    .then(text => {
+      let json;
+      try { json = JSON.parse(text); }
+      catch(e){
+        const err = new Error('Server sedang sibuk / baru bangun, coba lagi sebentar.');
+        err.retryable = true; throw err;
+      }
+      if (!json || json.success !== true){
+        const err = new Error((json && json.error) || 'Terjadi kesalahan pada server.');
+        err.retryable = /too many times|maximum execution time|try again|sibuk/i.test(err.message);
+        throw err;
+      }
+      return json.data;
+    })
+    .catch(err => {
+      if (err && err.name === 'AbortError'){ const e = new Error('Server terlalu lama merespons.'); e.retryable = true; throw e; }
+      if (err instanceof TypeError){ const e = new Error('Koneksi ke server gagal. Periksa internet kamu.'); e.retryable = true; throw e; }
+      throw err;
+    })
+    .finally(() => clearTimeout(timer));
+}
 function gs(fn, ...args){
   if (!GAS_API_URL || GAS_API_URL.indexOf('PASTE_URL_WEB_APP') !== -1){
     return Promise.reject(new Error('GAS_API_URL belum diisi di script.js. Isi dengan URL Web App Apps Script (Deploy > New deployment > Web app), diakhiri "/exec".'));
   }
-  return fetch(GAS_API_URL, {
-    method: 'POST',
-    // Content-Type text/plain dipakai supaya browser mengirim "simple request"
-    // (tanpa preflight OPTIONS), karena Apps Script Web App tidak merespons
-    // preflight CORS dengan benar.
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ fn, args })
-  })
-    .then(res => res.json())
-    .then(json => {
-      if (!json || json.success !== true){
-        throw new Error((json && json.error) || 'Terjadi kesalahan pada server.');
-      }
-      return json.data;
-    });
+  const canRetry = /^get/.test(fn);
+  const attempt = n => gsOnce_(fn, args).catch(err => {
+    if (canRetry && err.retryable && n < GS_MAX_RETRY){
+      return gsDelay_(800 * (n + 1)).then(() => attempt(n + 1));
+    }
+    throw err;
+  });
+  return attempt(0);
 }
 function rupiah(n){ n = Number(n)||0; return 'Rp ' + n.toLocaleString('id-ID'); }
 
@@ -124,20 +159,43 @@ function rupiah(n){ n = Number(n)||0; return 'Rp ' + n.toLocaleString('id-ID'); 
 // PENTING: begitu ada perubahan data (tambah/ubah/hapus apa pun lewat form manapun),
 // clearDataCache() dipanggil untuk mengosongkan SEMUA cache, supaya menu manapun yang
 // dibuka setelahnya selalu mengambil data terbaru dari server, tidak pernah basi.
-const CACHE_TTL_MS = 20000;
+const CACHE_TTL_MS = 30000;
 const _dataCache = new Map();
+const _inflight = new Map();   // permintaan identik yang sedang jalan dipakai bersama (tidak dobel ke server)
+const PERSIST_PREFIX = 'mjnet_data|';
+function persistGet_(key){ try{ const raw = localStorage.getItem(PERSIST_PREFIX + key); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
+function persistSet_(key, data){ try{ localStorage.setItem(PERSIST_PREFIX + key, JSON.stringify({ data, time: Date.now() })); }catch(e){} }
+function clearPersisted_(){
+  try{ Object.keys(localStorage).forEach(k => { if(k.indexOf(PERSIST_PREFIX) === 0) localStorage.removeItem(k); }); }catch(e){}
+}
 function gsCached(fn, ...args){
   const key = fn + '|' + JSON.stringify(args);
   const hit = _dataCache.get(key);
   if(hit && (Date.now() - hit.time) < CACHE_TTL_MS){
     return Promise.resolve(hit.data);
   }
-  return gs(fn, ...args).then(data => {
-    _dataCache.set(key, { data, time: Date.now() });
-    return data;
-  });
+  if(_inflight.has(key)) return _inflight.get(key);
+  const p = gs(fn, ...args)
+    .then(data => {
+      _dataCache.set(key, { data, time: Date.now() });
+      persistSet_(key, data);
+      return data;
+    })
+    .catch(err => {
+      // Server gagal setelah retry -> tampilkan data tersimpan terakhir (kalau ada) daripada layar kosong.
+      const old = persistGet_(key);
+      if(old && old.data !== undefined){
+        const mnt = Math.max(1, Math.round((Date.now() - old.time) / 60000));
+        toast('Server bermasalah (' + err.message + ') — menampilkan data tersimpan ' + mnt + ' menit lalu.', true);
+        return old.data;
+      }
+      throw err;
+    })
+    .finally(() => { _inflight.delete(key); });
+  _inflight.set(key, p);
+  return p;
 }
-function clearDataCache(){ _dataCache.clear(); }
+function clearDataCache(){ _dataCache.clear(); _inflight.clear(); }
 
 // ================= CETAK STRUK PEMBAYARAN (58mm thermal) =================
 // Dibuka di tab/window baru (BUKAN iframe) berukuran kertas 58mm. Web App Apps
@@ -507,8 +565,8 @@ function hideDataPopup(){
   clearTimeout(dataPopupHideTimer);
   document.getElementById('dataPopup').classList.remove('active');
 }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
-function currentMonth(){ return new Date().toISOString().slice(0,7); }
+function todayISO(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function currentMonth(){ return todayISO().slice(0,7); }
 // Cek status Aktif tanpa peduli huruf besar/kecil atau spasi (sheet bisa berisi "Aktif"/"AKTIF"/dll).
 function isAktif(status){ return String(status||'').trim().toLowerCase()==='aktif'; }
 
@@ -549,9 +607,13 @@ function loadView(view){
 function refreshCurrentView(){
   const btn = document.getElementById('btnRefresh');
   btn.classList.add('spin');
-  loadView(currentView);
-  toast('Data diperbarui.');
-  setTimeout(()=>btn.classList.remove('spin'), 650);
+  clearDataCache();
+  // buang juga cache di server, supaya tombol Refresh benar-benar membaca ulang dari Google Sheet
+  gs('refreshServerCache').catch(()=>{}).then(()=>{
+    loadView(currentView);
+    toast('Data diperbarui.');
+    setTimeout(()=>btn.classList.remove('spin'), 650);
+  });
 }
 
 // ================= GRAFIK BATANG (SVG murni, TANPA library/CDN eksternal) =================
@@ -711,7 +773,7 @@ async function loadPelangganTable(){
     pelangganCache = await gsCached('getPelangganList');
     renderPelangganTable();
     showDataLoaded();
-  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="11">Gagal memuat: ${err.message}</td></tr>`; }
+  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="11">Gagal memuat: ${err.message} &mdash; <a href="#" onclick="loadView(currentView);return false">Coba lagi</a></td></tr>`; }
 }
 function renderPelangganTable(){
   const tbody = document.getElementById('tblPelanggan');
@@ -866,7 +928,7 @@ async function loadPaketTable(){
         </td>
       </tr>`).join('');
     showDataLoaded();
-  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="5">Gagal memuat: ${err.message}</td></tr>`; }
+  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="5">Gagal memuat: ${err.message} &mdash; <a href="#" onclick="loadView(currentView);return false">Coba lagi</a></td></tr>`; }
 }
 function openPaketModal(){
   document.getElementById('formPaket').reset();
@@ -1014,7 +1076,7 @@ async function loadPaymentTable(){
         </td>
       </tr>`).join('');
     showDataLoaded();
-  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="10">Gagal memuat: ${err.message}</td></tr>`; }
+  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="10">Gagal memuat: ${err.message} &mdash; <a href="#" onclick="loadView(currentView);return false">Coba lagi</a></td></tr>`; }
 }
 async function deletePaymentRow(no){
   if(!confirm('Hapus data pembayaran ini?')) return;
@@ -1038,7 +1100,7 @@ async function loadUnpaidTable(){
       <tr><td><span class="id-chip">${p.id}</span></td><td><strong>${p.nama}</strong></td><td>${p.noHp||''}</td><td>${p.paket}</td><td class="money">${rupiah(p.tarifPaket)}</td></tr>
     `).join('');
     showDataLoaded();
-  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="5">Gagal memuat: ${err.message}</td></tr>`; document.getElementById('totalBelumBayarUnpaid').textContent = '–'; }
+  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="5">Gagal memuat: ${err.message} &mdash; <a href="#" onclick="loadView(currentView);return false">Coba lagi</a></td></tr>`; document.getElementById('totalBelumBayarUnpaid').textContent = '–'; }
 }
 
 // ================= PAYMENT: SETORAN PETUGAS =================
@@ -1076,7 +1138,7 @@ async function loadSetoranPetugas(){
         <tr><td>${h.tanggal}</td><td>${h.petugas}</td><td class="money pos">${rupiah(h.nominal)}</td><td>${h.keterangan||'-'}</td></tr>`).join('');
     }
     showDataLoaded();
-  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="4">Gagal memuat: ${err.message}</td></tr>`; }
+  }catch(err){ hideDataPopup(); tbody.innerHTML = `<tr class="loading-row"><td colspan="4">Gagal memuat: ${err.message} &mdash; <a href="#" onclick="loadView(currentView);return false">Coba lagi</a></td></tr>`; }
 }
 // Guard sederhana di frontend supaya double-click / submit berulang pada tombol
 // Simpan Setoran tidak mengirim dua request sekaligus (tombol langsung dikunci
